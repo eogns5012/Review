@@ -219,4 +219,120 @@ RetinaNet Detector
 
 -	Predicts the probability of object presence at each spatial position for each of the $A$ anchors and $K$ object classes
 -	This subnet is a small FCN attached to each FPN level
--
+-	Applies four $3 \times 3$ conv layers, each with $C$ filters and each followed ReLU activation
+
+### Box Regression Subnet
+
+-	In parallel with the object classification subnet, we attach another small FCN to each pyramid level for the purpose of regressing the offset from each anchor box to a nearby ground-truth object
+-	4 offset are (x_center, y_center, width, height)
+-	Use class-agnostic bounding box regressor
+	-	Uses fewer parameter and effective
+
+Inference and Training
+----------------------
+
+### Inference
+
+-	To improve speed, we only decode box predictions from at most 1k top-scoreing predictions per FPN level, after thresholding detector confidence at 0.05
+-	Final detections, use non-maximum suppression with a threshold of 0.5
+
+### Focal Loss
+
+-	Use the loss on the output of the classification subnet
+-	Focal loss is applied to all ~100k anchors in each sampled image and is computed as the sum of all anchors
+-	Note that $\alpha$, the weight assigned to the rare class, also has a stable range, but it interacts with $\gamma$ making it necessary to select the two together
+
+-	$\gamma = 2,\, \alpha = 0.25$ work best
+
+### Initialization
+
+-	Experiment with ResNet-50-FPN and ResNet-101-FPN backbone
+-	Models are pre-trained on ImageNet1K
+-	All new conv layers except the final one in the RetinaNet subnets are initialized with bias $b = 0$ and a Gaussian weight fill with $\sigma = 0.01$
+-	For the final conv layer of the classification subnet, set the bias Initialization to $ b = -\text{log}((1- \pi)/\pi),\, \pi = 0.01$
+
+### Optimization
+
+-	Trained with stochastic gradient descent(SGD) over 8 GPUs with a total of 16 images per minibatch
+-	Initial learning rate = 0.01, total 90k epochs
+-	at 60k and 80k, learning rate = 0.001, 0.0001 (divided by 10)
+-	weight decay = 0.001, momentum = 0.9
+-	class predict : focal loss / box regression : standard smooth $L_1$ loss
+-	Training time ranges between 10 and 35 hours
+
+---
+
+Experiments
+-----------
+
+Training Dense Detection
+------------------------
+
+### Network Initialization
+
+-	First uses standart cross entropy(CE) loss but fails quickly with the network diverging during training
+-	Simply initializing the last layer of our model such that the prior probability of detecing an object is $\pi = 0.01$ enables effective learning
+	-	AP 30.2 on COCO
+-	so we use $\pi = 0.01$ for all experiments
+
+### Balanced Cross Entropy
+
+-	Next uses $\alpha$-balanced CE loss
+
+![Table1-(a)](https://user-images.githubusercontent.com/56924420/135340066-ffd074ce-463b-49fe-ae51-62d60f8cd220.PNG)
+
+-	$\alpha = 0.75$ gives of 0.9 points AP
+
+### Focal Loss
+
+![Table1-(b)](https://user-images.githubusercontent.com/56924420/135341584-fe4c3d64-e775-4772-bb3e-53c99d5b02ac.PNG)
+
+-	For a fair comparison we find the best $\alpha$ for each $\gamma$
+-	The benefit of chaninging $\gamma$ is much larger, and indeed the best $\alpha's$ ranged in just [0.25, 0.75]
+-	We use $\gamma= 2.0 \, \text{with} \, \alpha = 0.25$, but $\alpha = 0.4$ works nearly as well
+
+### Analysis of the Focal Loss
+
+-	To understand the focal loss better, we analyze the emprical dirtribution of the loss of a converged model
+
+-	We take our default ResNet-101 600-pixel model trained with $\gamma = 2$
+
+![Figure4](https://user-images.githubusercontent.com/56924420/135345787-53026669-7680-4eec-920a-9f36dac149a3.PNG)
+
+-	Cumulative distribution functions for positive and negative samples
+-	Observe the positive samples, we see that the CDF looks fairly similar for different values of $\gamma$
+-	The effect of $\gamma$ on negative samples is dramatically different
+-	FL can effectively discount the effect of easy negatives, focusing all attention on the hard negative examples
+
+### Online Hard Example Mining(OHEM)
+
+-	Like the focal loss, OHEM puts more emphasis on misclassified example, but completely discards easy examples
+
+![Table1-(d)](https://user-images.githubusercontent.com/56924420/135347622-13fec800-c0fa-4183-ba50-94caa3f0bb93.PNG)
+
+Model Architecture Design
+-------------------------
+
+### Anchor Density
+
+-	One-stage detectors use a fixed sampling grid, use multiple 'anchors' at each spatial position to cover boxes of various scales and aspect ratios
+
+![Table1-(c)](https://user-images.githubusercontent.com/56924420/135349056-15a10520-b2b4-4d72-b93c-43e6c810723f.PNG)
+
+### Speed versus Accuracy
+
+![Figure2](https://user-images.githubusercontent.com/56924420/135349250-97ca9ec5-3284-4ee1-8061-11930d111ab5.PNG)
+
+![Table1-(e)](https://user-images.githubusercontent.com/56924420/135349180-b037bbb8-14c6-4d30-bac6-757474776cd4.PNG)
+
+### Comparison to State of the Art
+
+![Table2](https://user-images.githubusercontent.com/56924420/135349678-80dbd607-ea73-43eb-867d-db5a982e0643.PNG)
+
+---
+
+Conclusion
+----------
+
+-	We identify class imbalance as the primary obstacle preventing one-stage object detectors from surpassing top-perfoming, two-stage methods
+-	Focal loss which applies a modulating term to the croee entropy loss in order to focus learning on hard negative examples
